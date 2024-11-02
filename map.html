@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Procedural City with Random Buildings</title>
+<style>
+body { margin: 0; }
+canvas { display: block; }
+</style>
+
+<script type="importmap">
+{
+"imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/jsm/"
+}
+}
+</script>
+</head>
+<body>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// 맵 사이즈 설정
+const mapSize = 500; // 맵 크기 (500x500)
+const roadWidth = 10; // 도로 너비
+const roadBuffer = 3; // 도로와 건물 사이의 최소 거리
+
+// Scene, Camera, Renderer 설정
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+const renderer = new THREE.WebGLRenderer();
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// OrbitControls 설정
+const controls = new OrbitControls(camera, renderer.domElement);
+
+// 조명 추가 (강도를 1에서 2로 높임)
+const light = new THREE.DirectionalLight(0xffffff, 1); // 강도 값을 2로 설정하여 더 밝게 만듦
+light.position.set(1, 1, 1).normalize();
+scene.add(light);
+
+// 필요시 AmbientLight로 장면 전체의 밝기를 추가로 조정
+const ambientLight = new THREE.AmbientLight(0xffffff, 1.0); // 강도를 1.5로 설정하여 주변 조명을 추가
+scene.add(ambientLight);
+
+// 도로 및 교차로 위치를 저장할 배열
+const intersection = [];
+const roads = []; // 도로 경계를 저장할 배열
+
+// 도로 생성 함수 (랜덤한 위치에 도로 생성)
+function createRoad(x, z, length, orientation) {
+    const roadGeometry = orientation === 'horizontal' ?
+    new THREE.BoxGeometry(length, 0.1, roadWidth) :  // 가로 도로
+    new THREE.BoxGeometry(roadWidth, 0.1, length);   // 세로 도로
+    const roadMaterial = new THREE.MeshBasicMaterial({ color: 0x333333 });
+    const road = new THREE.Mesh(roadGeometry, roadMaterial);
+    road.position.set(x, 0, z);
+    roads.push({ x, z, width: roadWidth, length }); // 도로 경계 정보 저장
+    scene.add(road);
+    return road;
+}
+
+// 교차로 생성 함수
+function createIntersection(x, z) {
+    const intersectionGeometry = new THREE.BoxGeometry(roadWidth, 0.1, roadWidth);  // 교차로 크기
+    const intersectionMaterial = new THREE.MeshBasicMaterial({ color: 0x666666 });
+    const intersection = new THREE.Mesh(intersectionGeometry, intersectionMaterial);
+    intersection.position.set(x, 0, z);
+    scene.add(intersection);
+    intersections.push({ x, z });  // 교차로 위치 저장
+}
+
+// 도로 및 교차로 배치
+const roadPositionsX = [];
+const roadPositionsZ = [];
+const numRoads = 5; // 도로 개수
+
+// X축 도로 (수평 도로) 랜덤 배치
+for (let i = 0; i < numRoads; i++) {
+    const z = Math.floor(Math.random() * mapSize) - mapSize / 2;  // 랜덤 Z 위치
+    roadPositionsZ.push(z);
+    createRoad(0, z, mapSize, 'horizontal');  // 가로 도로
+}
+
+// Z축 도로 (수직 도로) 랜덤 배치
+for (let i = 0; i < numRoads; i++) {
+    const x = Math.floor(Math.random() * mapSize) - mapSize / 2;  // 랜덤 X 위치
+    roadPositionsX.push(x);
+    createRoad(x, 0, mapSize, 'vertical');  // 세로 도로
+}
+
+// 교차로 생성 (X축과 Z축 도로가 만나는 곳)
+for (let x of roadPositionsX) {
+    for (let z of roadPositionsZ) {
+    createIntersection(x, z);  // 교차로 추가
+    }
+}
+
+const cars = []; // 여러 대의 자동차를 저장할 배열
+const numCars = 10; // 자동차 개수 설정
+
+// 자동차 생성 함수 (도로 위에서 랜덤하게 여러 대 생성)
+function createCars(numCars) {
+    for (let i = 0; i < numCars; i++) {
+        const isVerticalRoad = Math.random() < 0.5; // 수직 도로를 선택할 확률 50%
+        let car;
+        
+        if (isVerticalRoad) {
+            // 세로(Z축) 도로 위에 랜덤하게 자동차 배치
+            const randomX = roadPositionsX[Math.floor(Math.random() * roadPositionsX.length)];
+            const randomZ = Math.random() * mapSize - mapSize / 2;
+            car = new THREE.Mesh(new THREE.BoxGeometry(2, 1, 4), new THREE.MeshLambertMaterial({ color: Math.random() * 0xffffff }));
+            car.position.set(randomX, 0.5, randomZ);  // 세로 도로 위에 배치
+            car.direction = Math.random() < 0.5 ? 'north' : 'south'; // 북쪽 또는 남쪽으로 시작
+        } else {
+            // 가로(X축) 도로 위에 랜덤하게 자동차 배치
+            const randomZ = roadPositionsZ[Math.floor(Math.random() * roadPositionsZ.length)];
+            const randomX = Math.random() * mapSize - mapSize / 2;
+            car = new THREE.Mesh(new THREE.BoxGeometry(2, 1, 4), new THREE.MeshLambertMaterial({ color: Math.random() * 0xffffff }));
+            car.position.set(randomX, 0.5, randomZ);  // 가로 도로 위에 배치
+            car.direction = Math.random() < 0.5 ? 'east' : 'west'; // 동쪽 또는 서쪽으로 시작
+        }
+
+        cars.push(car); // 배열에 자동차 추가
+        scene.add(car); // 장면에 추가
+    }
+}
+
+// 여러 대의 자동차를 제어하는 애니메이션 함수
+function animateCars() {
+    cars.forEach(car => {
+        // 자동차가 이동 중인 방향에 따라 위치 업데이트
+        switch (car.direction) {
+            case 'north':
+                car.position.z += 0.5;
+                break;
+            case 'south':
+                car.position.z -= 0.5;
+                break;
+            case 'east':
+                car.position.x += 0.5;
+                break;
+            case 'west':
+                car.position.x -= 0.5;
+                break;
+        }
+        
+        // 교차로에 도달했는지 확인 (정확한 교차로 좌표와 비교)
+        intersections.forEach(intersection => {
+            if (Math.abs(car.position.x - intersection.x) < 1 && Math.abs(car.position.z - intersection.z) < 1) {
+                // 교차로에 도달한 경우: 새로운 방향 선택
+                car.position.x = intersection.x;  // 교차로 중심으로 위치 보정
+                car.position.z = intersection.z;  // 교차로 중심으로 위치 보정
+
+                // 새로운 방향 선택 (왔던 방향을 제외하고)
+                const previousDirection = car.direction;
+                car.direction = chooseDirection(car.direction);
+
+                // 방향이 즉시 반영될 수 있도록 바로 위치 업데이트
+                switch (car.direction) {
+                    case 'north':
+                        car.position.z += 0.5;
+                        break;
+                    case 'south':
+                        car.position.z -= 0.5;
+                        break;
+                    case 'east':
+                        car.position.x += 0.5;
+                        break;
+                    case 'west':
+                        car.position.x -= 0.5;
+                        break;
+                }
+
+                // 만약 방향이 바뀌지 않으면, 무한 루프가 발생할 수 있으므로 추가 검증
+                if (car.direction === previousDirection) {
+                    console.log("경고: 새로운 방향이 기존 방향과 동일합니다.");
+                }
+                    }
+        });
+
+        // 자동차가 맵 경계를 벗어나지 않도록 제어
+        if (car.position.x > mapSize / 2) car.position.x = -mapSize / 2;
+        if (car.position.x < -mapSize / 2) car.position.x = mapSize / 2;
+        if (car.position.z > mapSize / 2) car.position.z = -mapSize / 2;
+        if (car.position.z < -mapSize / 2) car.position.z = mapSize / 2;
+    });
+}
+
+// 교차로에서 방향을 선택하는 함수
+function chooseDirection(currentDirection) {
+    const directions = ['north', 'south', 'east', 'west'];
+    const opposite = {
+        'north': 'south',
+        'south': 'north',
+        'east': 'west',
+        'west': 'east',
+    };
+
+    // 현재 방향의 반대 방향을 제외한 나머지 방향 중에서 선택
+    const availableDirections = directions.filter(dir => dir !== opposite[currentDirection]);
+    return availableDirections[Math.floor(Math.random() * availableDirections.length)];
+}
+
+// 자동차 생성 및 애니메이션 실행
+createCars(numCars);
+
+
+const buildings = []; // 건물을 저장할 배열
+const roadY = 0.1;    // 도로의 Y축 위치
+const buildingBaseY = 0.1; // 건물의 바닥 Y축 위치
+
+// 도로 및 기존 건물과 겹치지 않도록 건물 위치 체크 (도로와 건물 간 충돌 감지)map.html
+function isPositionValid(x, z, width, depth, height) {
+    const buffer = 5; // 도로와의 최소 거리
+    const halfWidth = width / 2;
+    const halfDepth = depth / 2;
+
+    // 도로와 겹치는지 확인 (X, Z 축과 Y축 충돌 포함)
+    for (let road of roads) {
+        const roadHalfWidth = road.width / 2 + buffer;
+        const roadHalfLength = road.length / 2 + buffer;
+
+        // 도로와 겹치는지 확인하는 충돌 체크 (건물 크기 반영)
+        if (
+            Math.abs(x - road.x) < roadHalfWidth + halfWidth &&  // X축 충돌 감지
+            Math.abs(z - road.z) < roadHalfLength + halfDepth    // Z축 충돌 감지
+        ) {
+            // Y축에서 도로 위에 있는지 확인 (건물의 바닥이 도로와 겹치는지 확인)
+            return false
+        }
+    }
+
+    // 기존 건물과 겹치는지 확인 (X, Z, Y축 모두 고려)
+    for (let building of buildings) {
+        const buildingHalfWidth = building.width / 2;
+        const buildingHalfDepth = building.depth / 2;
+
+        // 건물과 겹치는지 확인하는 충돌 체크 (건물 크기 반영)
+        if (
+            Math.abs(x - building.x) < buildingHalfWidth + halfWidth &&  // X축 충돌 감지
+            Math.abs(z - building.z) < buildingHalfDepth + halfDepth     // Z축 충돌 감지
+        ) {
+            return false;  // 다른 건물과 겹치면 false 반환
+        }
+    }
+
+    return true;  // 도로와 기존 건물과 겹치지 않으면 true 반환
+}
+
+// 건물 생성 함수
+function createBuilding(x, z, width, height, depth) {
+    const buildingGeometry = new THREE.BoxGeometry(width, height, depth);
+    const buildingMaterial = new THREE.MeshLambertMaterial({ color: Math.random() * 0xffffff });
+    const building = new THREE.Mesh(buildingGeometry, buildingMaterial);
+    building.position.set(x, height / 2 + buildingBaseY, z);  // 건물의 바닥을 Y축 높이에 맞게 설정
+    scene.add(building);
+
+    // 건물 정보를 배열에 저장 (충돌 감지를 위해)
+    buildings.push({ x, z, width, depth });
+}
+
+// 랜덤 건물 생성 함수 (도로 위에 겹치지 않게 생성)
+function createRandomBuildings(numBuildings) {
+    for (let i = 0; i < numBuildings; i++) {
+        const width = Math.random() * 10 + 10;  // 건물 너비
+        const height = Math.random() * 50 + 20;  // 건물 높이
+        const depth = Math.random() * 10 + 10;  // 건물 깊이
+        let x, z;
+
+        // 건물이 도로와 겹치지 않도록 유효한 위치를 찾을 때까지 반복
+        do {
+            x = Math.random() * mapSize - mapSize / 2;
+            z = Math.random() * mapSize - mapSize / 2;
+        } while (!isPositionValid(x, z, width, depth, height));  // 유효한 위치가 나올 때까지 반복
+
+        // 건물 생성
+        createBuilding(x, z, width, height, depth);
+    }
+}
+
+// 건물 생성 실행
+createRandomBuildings(100);  // 20개의 건물을 생성
+
+
+// 카메라 초기 위치 설정
+camera.position.set(0, 150, 150);
+camera.lookAt(0, 0, 0);
+
+// 애니메이션 루프
+function animate() {
+    requestAnimationFrame(animate);
+    animateCars();  // 자동차 움직임 업데이트
+    controls.update();  // 카메라 제어 업데이트
+    renderer.render(scene, camera);
+}
+animate();
+
+// 창 크기 변경 대응
+window.addEventListener('resize', () => {
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    renderer.setSize(width, height);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Three.js Random Terrain with Labels</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+    </style>
+    <!-- Three.js 라이브러리 -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.154.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="MV.js"></script>
+    <script type="importmap">
+        {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/jsm/"
+        }
+        }
+        </script>
+</head>
+<body>
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        const roadColor = 0x808080; // 회색 도로 색상
+        const buildingAreaColors = [0x3b5998, 0x8b9dc3, 0xdfe3ee, 0xf7f7f7]; // 건물 밀집 구역 색상
+        
+        const weatherParticles = [];
+        let weatherState = 'clear';
+
+        let raycaster = new THREE.Raycaster();
+        let mouse = new THREE.Vector2();
+
+        // 클릭 이벤트 리스너 추가
+        window.addEventListener('click', onMouseClick, false);
+
+        function onMouseClick(event) {
+            // 마우스 좌표를 정규화된 장치 좌표(NDC)로 변환
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            // Raycaster 설정
+            raycaster.setFromCamera(mouse, camera);
+
+            // 충돌 감지
+            const intersects = raycaster.intersectObjects(scene.children);
+
+            // 교차된 객체가 있는 경우
+            if (intersects.length > 0) {
+                const intersectedObject = intersects[0].object; // 클릭된 첫 번째 객체
+                const position = intersectedObject.position; // 클릭된 객체의 좌표
+                console.log(`Clicked position: x=${position.x}, y=${position.y}, z=${position.z}`);
+            }
+        }
+
+
+        class Chunk {
+            constructor(x, z, size) {
+                this.x = x * size;  // 절대 좌표로 설정
+                this.z = z * size;
+                this.size = size;
+                this.roadWidth = 2; // 도로 두께
+                this.mesh = new THREE.Group(); // 청크 내 여러 Mesh를 그룹으로 관리
+                this.buildings = [];
+                this.cars = [];
+                // 도로 및 교차로 배치(intersection 만들기 위해 사용)
+                this.roadPositionsX = [];
+                this.roadPositionsZ = [];
+                // 도로 경계를 저장할 배열
+                this.roadsL = [];
+                this.roadsR = [];
+                this.roadsT = [];
+                this.roadsB = [];
+                this.roadmesh= [];
+                //4개의 교차로를 저장할 배열
+                this.intersectionRB= new Set();//roadsR, roadsB를 비교
+                this.intersectionRT= new Set();
+                this.intersectionLB= new Set();
+                this.intersectionLT= new Set();
+                this.intersectionRR= new Set();
+                this.intersectionLL= new Set();
+                this.generatepoints= [];
+                this.label = this.getRandomLabel(); // 랜덤 라벨 생성
+                this.buildingColor = buildingAreaColors[this.label]; // 라벨에 따른 건물 색상
+                
+                this.generateChunk();
+                this.createCars(1);
+            }
+            // 랜덤 라벨을 반환하는 함수 (0 ~ 3)
+            getRandomLabel() {
+                return Math.floor(Math.random() * 4);
+            }
+            // 청크 생성
+            generateChunk() {
+                // 상하좌우 도로 생성
+                this.createBorderRoads();
+                
+                // 청크를 꽉 채우는 건물 밀집 구역 생성
+                this.fillWithBuildingAreas();
+                
+                //교차로 생성
+                this.createIntersections();
+
+                //도로위에 차 생성
+                
+
+                //건물생성
+
+            }
+
+            // 상하좌우 도로를 생성하는 함수
+            createBorderRoads() {
+                const roadMaterial = new THREE.MeshLambertMaterial({ color: roadColor });
+                roadMaterial.receiveShadow = true;
+                // 상단 도로
+                let roadGeometry = new THREE.PlaneGeometry(this.size, this.roadWidth);
+                roadGeometry.rotateX(-Math.PI / 2);
+                let road = new THREE.Mesh(roadGeometry, roadMaterial);
+                road.position.set(this.x + this.size / 2, 0.1, this.z + this.size - this.roadWidth / 2);
+                this.mesh.add(road);
+
+                // 하단 도로
+                road = road.clone();
+                road.position.set(this.x + this.size / 2, 0.1, this.z + this.roadWidth / 2);
+                this.mesh.add(road);
+
+                // 좌측 도로
+                roadGeometry = new THREE.PlaneGeometry(this.roadWidth, this.size);
+                roadGeometry.rotateX(-Math.PI / 2);
+                road = new THREE.Mesh(roadGeometry, roadMaterial);
+                road.position.set(this.x + this.roadWidth / 2, 0.1, this.z + this.size / 2);
+                this.mesh.add(road);
+
+                // 우측 도로
+                road = road.clone();
+                road.position.set(this.x + this.size - this.roadWidth / 2, 0.1, this.z + this.size / 2);
+                this.mesh.add(road);
+            }
+
+            // 청크를 꽉 채우는 건물 밀집 구역을 반복해서 생성
+            fillWithBuildingAreas() {
+                const buildingAreaMaterial = new THREE.MeshLambertMaterial({ color: this.buildingColor });
+                const roadMaterial = new THREE.MeshLambertMaterial({ color: roadColor });
+                const roadWidth = this.roadWidth;
+
+                let currentX = this.x + roadWidth;
+                let currentZ = this.z + roadWidth;
+                // 5개의 랜덤한 X 크기 생성 (건물 너비)
+                const xValues = this.generateRandomSizes(this.size - 2 * roadWidth, 5, 40, 100);
+
+                // X축을 따라 건물 배치
+                for (let i = 0; i < xValues.length; i++) {
+                    const xWidth = xValues[i];
+                    currentZ = this.z+ roadWidth;  // Z축을 다시 처음 위치로 리셋
+
+                    // 5개의 랜덤한 Z 크기 생성 (건물 깊이)
+                    const zValues = this.generateRandomSizes(this.size - 2 * roadWidth, 5, 40, 100);
+                    // Z축을 따라 건물 배치
+                    for (let j = 0; j < zValues.length; j++) {
+                        const zDepth = zValues[j];
+
+                        // 도로를 그리는 함수 호출
+                        this.createRoads(currentX+roadWidth, currentZ, xWidth, zDepth, roadWidth, roadMaterial);
+
+                        // 건물 밀집 구역 생성
+                        const buildingAreaGeometry = new THREE.PlaneGeometry(xWidth - 2 * roadWidth, zDepth - 2 * roadWidth);
+                        buildingAreaGeometry.rotateX(-Math.PI / 2); // 평면을 위로 돌림
+                        const buildingArea = new THREE.Mesh(buildingAreaGeometry, buildingAreaMaterial);
+                        buildingArea.position.set(currentX + xWidth / 2, 0.1, currentZ + zDepth / 2);
+                        this.mesh.add(buildingArea);
+
+                        currentZ += zDepth; // 다음 Z축으로 이동
+                    }
+
+                    currentX += xWidth; // 다음 X축으로 이동
+                }
+            }
+            createRoads(x, z, width, depth, roadWidth, roadMaterial) {
+                const roadGeometryX = new THREE.PlaneGeometry(width, roadWidth);  // 가로 도로용
+                const roadGeometryZ = new THREE.PlaneGeometry(roadWidth, depth-2*roadWidth);  // 세로 도로용
+            
+                roadGeometryX.rotateX(-Math.PI / 2);
+                roadGeometryZ.rotateX(-Math.PI / 2);
+            
+                // 상단 도로
+                const topRoad = new THREE.Mesh(roadGeometryX, new THREE.MeshLambertMaterial({ color: 0xcf3213 }));
+                topRoad.position.set(x + width / 2-roadWidth, 0.1, z + depth - roadWidth / 2);
+                topRoad.geometry.computeBoundingBox();  // boundingBox 계산
+                this.mesh.add(topRoad);
+                this.roadsT.push({ x:(x + width / 2-roadWidth), z:z + depth - roadWidth / 2, width: width, depth: depth,f:width });
+                this.roadmesh.push(topRoad);
+                
+
+                // 하단 도로
+                const bottomRoad = new THREE.Mesh(roadGeometryX, new THREE.MeshLambertMaterial({ color: 0xfcba03}));
+                bottomRoad.position.set(x + width / 2-roadWidth, 0.1, z + roadWidth / 2);
+                bottomRoad.geometry.computeBoundingBox();  // boundingBox 계산
+                this.mesh.add(bottomRoad);
+                this.roadsB.push({x:x + width / 2-roadWidth, z: z + roadWidth / 2, width: width, depth: depth,f:width,f:width});
+                this.roadmesh.push(bottomRoad);
+                
+
+                // 좌측 도로
+                const leftRoad = new THREE.Mesh(roadGeometryZ, new THREE.MeshLambertMaterial({ color: 0x0fd166 }));
+                leftRoad.position.set(x + width - 3*roadWidth/2, 0.1, z + depth / 2);
+                leftRoad.geometry.computeBoundingBox();  // boundingBox 계산
+                this.mesh.add(leftRoad);
+                this.roadsL.push({x:x + width - 3*roadWidth/2, z: z + depth / 2, width: width, depth: depth,f:depth-2*roadWidth});
+                this.roadmesh.push(leftRoad);
+                
+
+                // 우측 도로
+                const rightRoad = new THREE.Mesh(roadGeometryZ, new THREE.MeshLambertMaterial({ color: 0x1c23ad }));
+                rightRoad.position.set(x - roadWidth / 2, 0.1, z + depth / 2);
+                rightRoad.geometry.computeBoundingBox();  // boundingBox 계산
+                this.mesh.add(rightRoad);
+                this.roadsR.push({x:x - roadWidth / 2, z: z + depth / 2, width: width, depth: depth,f:depth-2*roadWidth});
+                this.roadmesh.push(rightRoad);
+                
+
+            }
+
+            // 교차로 생성 함수
+            createIntersections() {
+                const intersectionMaterial = new THREE.MeshLambertMaterial({ color: 0xAAAAAA });
+                const intersectionGeometry = new THREE.BoxGeometry(this.roadWidth, 0.1, this.roadWidth);
+
+                for (let r of this.roadsR){
+                    for(let t of this.roadsT){
+                        
+                        if(r.x+this.roadWidth/2 == t.x - t.width/2 + this.roadWidth){
+                            
+                            const intersection = new THREE.Mesh(intersectionGeometry, new THREE.MeshLambertMaterial({ color: 0xf54242 }));
+                            intersection.position.set(r.x,0.1,r.z+r.depth/2+this.roadWidth/2-this.roadWidth);
+                            this.mesh.add(intersection);
+                            this.intersectionRT.add(intersection);
+                        }
+                    }
+                }
+                for (let r of this.roadsR){
+                    for(let b of this.roadsB){
+                        if(r.x+this.roadWidth/2 == b.x - b.width/2 + this.roadWidth){
+                            const intersection = new THREE.Mesh(intersectionGeometry,new  THREE.MeshLambertMaterial({ color: 0xfada3c }));
+                            intersection.position.set(r.x,0.1,r.z-r.depth/2+this.roadWidth/2);
+                            this.mesh.add(intersection);
+                            //console.log(intersection.position);
+                            this.intersectionRB.add(intersection);
+                        }
+                    }
+                }
+                for (let l of this.roadsL){
+                    for(let b of this.roadsB){
+                        if(l.x-l.width+3*this.roadWidth/2 == b.x-b.width/2 + this.roadWidth){
+                            const intersection = new THREE.Mesh(intersectionGeometry, new THREE.MeshLambertMaterial({ color: 0x5cf233 }));
+                            intersection.position.set(l.x,0.1,l.z-l.depth/2-this.roadWidth/2+this.roadWidth);
+                            this.mesh.add(intersection);
+                            //console.log(intersection.position);
+                            this.intersectionLB.add(intersection);
+                        }
+                    }
+                }
+                for (let l of this.roadsL){
+                    for(let t of this.roadsT){
+                        if(t.x - t.width/2 + this.roadWidth == l.x-l.width+3*this.roadWidth/2){
+                            const intersection = new THREE.Mesh(intersectionGeometry, new THREE.MeshLambertMaterial({ color: 0x33aff2 }));
+                            intersection.position.set(l.x,0.1,l.z-l.depth/2+-this.roadWidth/2+l.depth);
+                            this.mesh.add(intersection);
+                            
+                            this.intersectionLT.add(intersection);
+                        }
+                    }
+                }
+
+                
+                
+                for (let rT of this.roadsR){
+                    for(let rB of this.roadsR){
+                        if(rT.z-rT.depth/2 == rB.z+rB.depth/2){
+                            const intersection = new THREE.Mesh(intersectionGeometry, new THREE.MeshLambertMaterial({ color: roadColor }));
+                            intersection.position.set(rT.x-this.roadWidth,0.1,rB.z+rB.depth/2-this.roadWidth/2);
+                            this.mesh.add(intersection);
+                            
+                            this.intersectionRR.add(intersection);
+                        }
+                    }
+                }
+                for (let lT of this.roadsL){
+                    for(let lB of this.roadsL){
+                        if(lT.z-lT.depth/2 == lB.z+lB.depth/2){
+                            const intersection = new THREE.Mesh(intersectionGeometry, new THREE.MeshLambertMaterial({ color: roadColor }));
+                            intersection.position.set(lT.x+this.roadWidth,0.1,lB.z+lB.depth/2+this.roadWidth/2);
+                            this.mesh.add(intersection);
+                            //console.log(intersection.position);
+                            this.intersectionLL.add(intersection);
+                        }
+                    }
+                }
+                this.generatepoint = this.generatePointsFromRoads()
+            }
+
+            
+
+            generateRandomSizes(sum, count, min, max) {
+                const sizes = [];
+                let total = 0;
+            
+                // 값들을 먼저 min으로 채우고, 그 다음으로 남은 값을 분배
+                for (let i = 0; i < count; i++) {
+                    sizes.push(min);
+                    total += min;
+                }
+            
+                let remaining = sum - total;
+            
+                // 남은 값을 랜덤하게 각 사이즈에 분배 (정수로 처리)
+                while (remaining > 0) {
+                    for (let i = 0; i < count && remaining > 0; i++) {
+                        const add = Math.min(remaining, Math.floor(Math.random() * (max - min + 1)));
+                        sizes[i] += add;
+                        remaining -= add;
+                    }
+                }
+            
+                return sizes;
+            }
+            createCars(numberOfCars){
+                for(let i=0;i<numberOfCars;i++){
+
+                    //0이면 rightroads
+                    //1이면 leftroads
+                    //2이면 toproads
+                    //3이면 bottomroads
+                    const roadIndex = Math.floor(Math.random()*4);
+                    
+                    
+                    if(roadIndex==0){
+                        //roadsR[]에서 랜덤으로 하나
+                        const randomElement = this.roadsR[Math.floor(Math.random() * this.roadsR.length)];
+                        const car = new THREE.Mesh(new THREE.BoxGeometry(2, 6, 2), new THREE.MeshLambertMaterial({ color: Math.random() * 0xffffff }));
+                        car.position.set(randomElement.x, 0.5, randomElement.z); 
+                        car.direction = 'south'; 
+                        this.cars.push(car);
+                        this.mesh.add(car);                       
+                    } else if(roadIndex==1){
+                        //roadsL[]에서      으로 하나
+                        const randomElement = this.roadsL[Math.floor(Math.random() * this.roadsL.length)];
+                        const car = new THREE.Mesh(new THREE.BoxGeometry(2, 6, 2), new THREE.MeshLambertMaterial({ color: Math.random() * 0xffffff }));
+                        car.position.set(randomElement.x, 0.5, randomElement.z); 
+                        car.direction = 'north'; 
+                        this.cars.push(car);
+                        this.mesh.add(car);
+                    } else if(roadIndex==2){
+                        const randomElement = this.roadsT[Math.floor(Math.random()* this.roadsT.length)];
+                        const car = new THREE.Mesh(new THREE.BoxGeometry(2, 6, 2), new THREE.MeshLambertMaterial({ color: Math.random() * 0xffffff }));
+                        car.position.set(randomElement.x, 0.5, randomElement.z);
+                        car.direction = 'west';
+                        this.cars.push(car);
+                        this.mesh.add(car);
+                    }else{
+                        const randomElement = this.roadsB[Math.floor(Math.random()* this.roadsB.length)];
+                        const car = new THREE.Mesh(new THREE.BoxGeometry(2, 6, 2), new THREE.MeshLambertMaterial({ color: Math.random() * 0xffffff }));
+                        car.position.set(randomElement.x, 0.5, randomElement.z);
+                        car.direction = 'east';
+
+                        this.cars.push(car);
+                        this.mesh.add(car);
+                        console.log(this.cars);
+                    }
+                    console.log(this.cars);
+                }
+            }
+            animateCar(){
+                this.cars.forEach(car => {
+                    console.log(this.cars[0].position);
+                    
+                    if(car.direction=='north'){
+                        car.position.z += 0.1;
+                        
+                    } else if(car.direction=='south'){
+                        car.position.z -= 0.1;
+                        
+                    } else if(car.direction=='west'){
+                        car.position.x -= 0.1;
+                        
+                    } else{
+                        car.position.x += 0.1;
+                    }
+                    
+                    console.log(this.cars); 
+                    if (!scene.getObjectById(car.id)) {
+                        console.log(`Car with ID ${car.id} is missing from the scene.`);
+                    }
+                    // 교차로에 도달했는지 확인 (정확한 교차로 좌표와 비교)
+                    
+                    for(let intersection of this.intersectionLB){
+                        
+                        if(intersection.position.distanceTo(car.position)<1){
+                            car.position.x = intersection.position.x;  // 교차로 중심으로 위치 보정
+                            car.position.z = intersection.position.z;  // 교차로 중심으로 위치 보정
+                            // 새로운 방향 선택 (왔던 방향을 제외하고)
+                            console.log("lb");
+                            console.log(car.position);
+                            const direction = this.chooseDirectionAtIntersection(intersection, car.direction,"LB");
+                            car.direction = direction;
+                            console.log("2");
+                            console.log(car.direction);
+                            console.log(car.position);
+                            // 방향이 즉시 반영될 수 있도록 바로 위치 업데이트
+                            switch (car.direction) {
+                                case 'north':
+                                    car.position.z += this.roadWidth+ 0.1;
+                                    break;
+                                case 'south':
+                                    car.position.z -= 2*this.roadWidth;
+                                    car.position.x -= this.roadWidth;
+                                    break;
+                                case 'east':
+                                    //car.position.x += 0.5;
+                                    break;
+                                case 'west':
+                                    car.position.x -= 2*this.roadWidth;
+                                    break;
+                            }   
+                        }
+                    }
+                    console.log(car.position);
+                    for(let intersection of this.intersectionLT){
+                        
+                        
+                        if(intersection.position.distanceTo(car.position)<1){
+                            car.position.x = intersection.position.x;  // 교차로 중심으로 위치 보정
+                            car.position.z = intersection.position.z;  // 교차로 중심으로 위치 보정
+                            console.log("LT");
+                            console.log(car.position);
+                            
+                            // 새로운 방향 선택 (왔던 방향을 제외하고)
+                            
+                            const direction = this.chooseDirectionAtIntersection(intersection, car.direction,"LT");
+                            
+                            console.log(direction);
+                            car.direction = direction;
+                            console.log("2");
+                            console.log(car.direction);
+                            console.log(car.position);
+                            // 방향이 즉시 반영될 수 있도록 바로 위치 업데이트
+                            switch (car.direction) {
+                                case 'north':
+                                    car.position.z += this.roadWidth+0.5;
+                                    break;
+                                case 'south':
+                                    //car.position.z -= 2*this.roadWidth;
+                                    //car.position.x -= this.roadWidth;
+                                    break;
+                                case 'east':
+                                    car.position.x += 0.5;
+                                    break;
+                                case 'west':
+                                    car.position.z -= this.roadWidth+0.5;
+                                    car.position.x += this.roadWidth+0.5;
+                                    break;
+                            }   
+                        }
+                    }
+                    console.log(car.position);
+                    for(let intersection of this.intersectionRB){
+                        if(intersection.position.distanceTo(car.position)<1){
+                            car.position.x = intersection.position.x;  // 교차로 중심으로 위치 보정
+                            car.position.z = intersection.position.z;  // 교차로 중심으로 위치 보정
+                            // 새로운 방향 선택 (왔던 방향을 제외하고)
+                            console.log("rb");
+                            console.log(car.position);
+                            const direction = this.chooseDirectionAtIntersection(intersection, car.direction,"RB");
+                            car.direction = direction;
+                            console.log("2");
+                            console.log(car.direction);
+                            // 방향이 즉시 반영될 수 있도록 바로 위치 업데이트
+                            switch (car.direction) {
+                                case 'north':
+                                    car.position.z += 0.1;
+                                    break;
+                                case 'south':
+                                    car.position.z -= this.roadWidth+0.1;
+                                    car.position.x += this.roadWidth;
+                                    break;
+                                case 'east':
+                                    car.position.x += this.roadWidth+0.1;
+                                    break;
+                                case 'west':
+                                    //car.position.x -= 2*this.roadWidth;
+                                    break;
+                            }   
+                        }
+                    }
+                    console.log(car.position);
+                    for(let intersection of this.intersectionRT){
+                        if(intersection.position.distanceTo(car.position)<1){
+                            car.position.x = intersection.position.x;  // 교차로 중심으로 위치 보정
+                            car.position.z = intersection.position.z;  // 교차로 중심으로 위치 보정
+                            // 새로운 방향 선택 (왔던 방향을 제외하고)
+                            console.log("rt");
+                            console.log(car.position);
+                            let direction = this.chooseDirectionAtIntersection(intersection, car.direction,"RT");
+                            car.direction = direction;
+                            console.log("2");
+                            console.log(car.direction);
+                            console.log(car.position);
+                            
+                            // 방향이 즉시 반영될 수 있도록 바로 위치 업데이트
+                            switch (car.direction) {
+                                case 'north':
+                                    car.position.x += this.roadWidth+0.1;
+                                    console.log(car.position);
+                                    break;
+                                case 'south':
+                                    car.position.z -= 0.1;
+                                    console.log(car.position);
+                                    break;
+                                case 'east':
+                                    car.position.x += this.roadWidth+0.1;
+                                    console.log(car.position);
+                                    break;
+                                case 'west':
+                                    //car.position.x -= 2*this.roadWidth;
+                                    break;
+                            }   
+                        }
+                    }
+                    console.log(car.position);
+                    for(let intersection of this.intersectionRR){
+                        if(intersection.position.distanceTo(car.position)<1){
+                            car.position.x = intersection.position.x;  // 교차로 중심으로 위치 보정
+                            car.position.z = intersection.position.z;  // 교차로 중심으로 위치 보정
+                            // 새로운 방향 선택 (왔던 방향을 제외하고)
+                            console.log("RR");
+                            console.log(car.position);
+                            const direction = this.chooseDirectionAtIntersection(intersection, car.direction,"RR");
+                            car.direction = direction;             
+                            console.log("2");
+                            console.log(car.direction);
+                            console.log(car.position);
+                            // 방향이 즉시 반영될 수 있도록 바로 위치 업데이트
+                            switch (car.direction) {
+                                case 'north':
+                                    car.position.z += this.roadWidth+0.1;
+                                    break;
+                                case 'south':
+                                    car.position.z -= this.roadWidth+0.1;
+                                    car.position.x += this.roadWidth;
+                                    break;
+                                case 'east':
+                                    car.position.x += this.roadWidth+0.1;
+                                    break;
+                                case 'west':
+                                    car.position.z -= this.roadWidth+0.1;
+                                    break;
+                            }   
+                        }
+                    }
+                    console.log(car.position);
+                    for(let intersection of this.intersectionLL){
+                        if(intersection.position.distanceTo(car.position)<1){
+                            car.position.x = intersection.position.x;  // 교차로 중심으로 위치 보정
+                            car.position.z = intersection.position.z;  // 교차로 중심으로 위치 보정
+                            console.log("LL");
+                            console.log(car.position);
+                            // 새로운 방향 선택 (왔던 방향을 제외하고)
+                            const direction = this.chooseDirectionAtIntersection(intersection, car.direction,"LL");
+                            car.direction = direction;
+                            console.log("2");
+                            console.log(car.direction);
+                            console.log(car.position);
+                            // 방향이 즉시 반영될 수 있도록 바로 위치 업데이트
+                            switch (car.direction) {
+                                case 'north':
+                                    car.position.z += 0.1;
+                                    break;
+                                case 'south':
+                                    car.position.z -= this.roadWidth+0.1;
+                                    car.position.x += this.roadWidth;
+                                    break;
+                                case 'east':
+                                    car.position.x += this.roadWidth+0.1;
+                                    break;
+                                case 'west':
+                                    car.position.z += this.roadWidth;
+                                    car.position.x += 0.1;
+                                    break;
+                            }   
+                        }
+                    }
+                    console.log(car.position);
+                    
+
+                });
+                
+            
+            
+            }
+            generatePointsFromRoads() {
+                const points = [];
+                const meshMaterial = new THREE.MeshLambertMaterial({ color: 0xff0000 }); // 빨간색 material
+                
+                // roadsR 배열 처리
+                this.roadsR.forEach(road => {
+                    const x = road.x;
+                    const z = road.z;
+                    const f = road.f;
+                    // 두 점 계산
+                    const point1 = new THREE.Vector3(x, 0.1, z - f/2+ this.roadWidth/2 );
+                    const point2 = new THREE.Vector3(x, 0.1, z + f/2-this.roadWidth/2 );
+                    const point3 = new THREE.Vector3(x-this.roadWidth, 0.1,z + f/2- this.roadWidth/2);
+                    const point4 = new THREE.Vector3(x-this.roadWidth, 0.1,z - f/2+ this.roadWidth/2 );
+                    points.push(point1, point2);
+                    points.push(point3, point4);
+                    // 두 점에 해당하는 Mesh 생성
+                    this.addMeshAtPoint(point1, meshMaterial);
+                    this.addMeshAtPoint(point2, meshMaterial);
+                    this.addMeshAtPoint(point3, meshMaterial); 
+                    this.addMeshAtPoint(point4, meshMaterial);
+                });
+            
+                // roadsL 배열 처리
+                this.roadsL.forEach(road => {
+                    const x = road.x;
+                    const z = road.z;
+                    const f = road.f;
+                    // 두 점 계산
+                    const point1 = new THREE.Vector3(x, 0.1, z - f/2+ this.roadWidth/2 );
+                    const point2 = new THREE.Vector3(x, 0.1, z + f/2-this.roadWidth/2 );
+                    const point3 = new THREE.Vector3(x+this.roadWidth, 0.1,z - f/2+ this.roadWidth/2 );
+                    const point4 = new THREE.Vector3(x+this.roadWidth, 0.1,z + f/2- this.roadWidth/2 );
+                    points.push(point1, point2);
+                    points.push(point3, point4);
+                    // 두 점에 해당하는 Mesh 생성
+                    this.addMeshAtPoint(point1, meshMaterial);
+                    this.addMeshAtPoint(point2, meshMaterial);
+                    this.addMeshAtPoint(point3, meshMaterial);
+                    this.addMeshAtPoint(point4, meshMaterial);
+                });
+            
+                // roadsT 배열 처리
+                this.roadsT.forEach(road => {
+                    const x = road.x;
+                    const z = road.z;
+                    const f = road.f;
+                    // 두 점 계산
+                    const point1 = new THREE.Vector3(x - f/2+this.roadWidth/2+this.roadWidth , 0.1, z);
+                    const point2 = new THREE.Vector3(x + f/2-this.roadWidth/2-this.roadWidth , 0.1, z);
+                    points.push(point1, point2);
+                    
+                    // 두 점에 해당하는 Mesh 생성
+                    this.addMeshAtPoint(point1, meshMaterial);
+                    this.addMeshAtPoint(point2, meshMaterial);
+                });
+            
+                // roadsB 배열 처리
+                this.roadsB.forEach(road => {
+                    const x = road.x;
+                    const z = road.z;
+                    const f = road.f;
+                    // 두 점 계산
+                    const point1 = new THREE.Vector3(x - f/2+this.roadWidth/2+this.roadWidth , 0.1, z);
+                    const point2 = new THREE.Vector3(x + f/2-this.roadWidth/2-this.roadWidth , 0.1, z);
+                    points.push(point1, point2);
+                    
+                    // 두 점에 해당하는 Mesh 생성
+                    this.addMeshAtPoint(point1, meshMaterial);
+                    this.addMeshAtPoint(point2, meshMaterial);
+                });
+            
+                return points;
+            }
+            
+            addMeshAtPoint(point, material) {
+                const geometry = new THREE.BoxGeometry(1, 0.1, 1); // 크기 0.4, 0.1, 0.4의 박스 생성
+                const mesh = new THREE.Mesh(geometry, material);
+                mesh.position.copy(point); // point 좌표로 mesh 위치 설정
+                this.mesh.add(mesh); // 씬에 추가
+            
+                // 클릭 가능한 객체로 추가
+                scene.add(mesh); // 클릭 가능한 객체를 씬에 추가
+            }
+            
+            
+            // 도로가 있는지 확인하는 함수
+            checkRoadDirection(intersection,intersectiondirection) {
+                
+                let possibleDirections = [];
+                let roadWidth = this.roadWidth;
+                // 교차로 기준 좌표
+                const x = intersection.position.x;
+                const z = intersection.position.z;
+                const roads = this.generatepoint;
+                
+                console.log(intersection)
+                console.log(intersectiondirection)
+                if(intersectiondirection == "LB"){
+                    
+                        //만약 LB이라면
+                    // 각 도로가 포함되는지 확인하는 좌표
+                    const topCheck = new THREE.Vector3(x, 0.1, z + roadWidth);
+                    const bottomCheck = new THREE.Vector3(x-roadWidth, 0.1, z - 2*roadWidth);
+                    const leftCheck = new THREE.Vector3(x - 2*roadWidth, 0.1, z);
+                    
+                    console.log(topCheck);
+                    console.log(bottomCheck);
+                    console.log(leftCheck);
+                    // 도로에 포함되어 있는지 검사
+
+                    roads.forEach(road => {
+                        
+                        if (road.distanceToSquared(topCheck)<0.000001) {
+                            possibleDirections.push('north');
+                        }
+                        if (road.distanceToSquared(bottomCheck)<0.000001) {
+                            possibleDirections.push('south');
+                        }
+                        if (road.distanceToSquared(leftCheck)<0.000001) {
+                            possibleDirections.push('west');
+                        }
+                    });
+                }else if(intersectiondirection == "LT"){
+                    
+                    //만약 LT이라면
+                    // 각 도로가 포함되는지 확인하는 좌표
+                    const topCheck = new THREE.Vector3(x, 0.1, z + 2* roadWidth);
+                    //const bottomCheck = new THREE.Vector3(x-roadWidth, 0, z - roadWidth);
+                    const leftCheck = new THREE.Vector3(x -2* roadWidth, 0.1, z+roadWidth);
+                    const rightCheck = new THREE.Vector3(x+roadWidth,0.1,z);
+                    console.log(topCheck);
+                    console.log(rightCheck);
+                    console.log(leftCheck);
+                    // 도로에 포함되어 있는지 검사
+                    roads.forEach(road => {
+                        if (road.distanceToSquared(topCheck)<0.000001) {
+                            possibleDirections.push('north');
+                        }
+                        if (road.distanceToSquared(rightCheck)<0.000001) {
+                            possibleDirections.push('east');
+                        }
+                        if (road.distanceToSquared(leftCheck)<0.000001) {
+                            possibleDirections.push('west');
+                        }
+                    }); 
+                }else if(intersectiondirection == "RB"){
+                    
+                        //만약 RB이라면
+                    // 각 도로가 포함되는지 확인하는 좌표
+                    //const topCheck = new THREE.Vector3(x+roadWidth, 0, z + roadWidth);
+                    const bottomCheck = new THREE.Vector3(x, 0.1, z - 2*roadWidth);
+                    const leftCheck = new THREE.Vector3(x - roadWidth, 0.1, z);
+                    const rightCheck = new THREE.Vector3(x+2*roadWidth,0.1,z-roadWidth);
+                    console.log(rightCheck);
+                    console.log(bottomCheck);
+                    console.log(leftCheck);
+                    // 도로에 포함되어 있는지 검사
+                    roads.forEach(road => {
+                        console.log(road.position);
+                        if (road.distanceToSquared(rightCheck)<0.000001) {
+                            possibleDirections.push('south');
+                        }
+                        if (road.distanceToSquared(bottomCheck)<0.000001) {
+                            possibleDirections.push('east');
+                        }
+                        if (road.distanceToSquared(leftCheck)<0.000001) {
+                            possibleDirections.push('west');
+                        }
+                    });
+                }else if(intersectiondirection == "RT"){
+                    
+                        //만약 RT이라면
+                    // 각 도로가 포함되는지 확인하는 좌표
+                    const topCheck = new THREE.Vector3(x+roadWidth, 0.1, z +2* roadWidth);
+                    const bottomCheck = new THREE.Vector3(x, 0.1, z - roadWidth);
+                    //const leftCheck = new THREE.Vector3(x , 0, z+2*roadWidth);
+                    const rightCheck = new THREE.Vector3(x+2*roadWidth,0.1,z);
+                    console.log(topCheck);
+                    console.log(bottomCheck);
+                    console.log(rightCheck);
+                    // 도로에 포함되어 있는지 검사
+                    roads.forEach(road => {
+                        
+                        if (road.distanceToSquared(topCheck)<0.000001) {
+                            possibleDirections.push('north');
+                        }
+                        if (road.distanceToSquared(bottomCheck)<0.000001) {
+                            possibleDirections.push('south');
+                        }
+                        if (road.distanceToSquared(rightCheck)<0.000001) {
+                            possibleDirections.push('east');
+                        }
+                
+                });
+                }
+                else if(intersectiondirection == "RR"){
+                    possibleDirections.push('north');
+                    possibleDirections.push('west');
+
+                
+                }
+                else if(intersectiondirection == "LL"){
+                    possibleDirections.push('north');
+                    possibleDirections.push('west');
+                    
+                    
+                }
+                
+
+                return possibleDirections;
+            }
+            // 교차로에서 갈 수 있는 방향을 확인하는 함수
+            chooseDirectionAtIntersection(intersection, currentDirection,intersectiondirection) {
+                
+                const possibleDirections = this.checkRoadDirection(intersection,intersectiondirection);
+                console.log(possibleDirections);
+                // 현재 방향의 반대 방향을 제외한 방향만 선택
+                const oppositeDirection = {
+                    'north': 'south',
+                    'south': 'north',
+                    'east': 'west',
+                    'west': 'east'
+                };
+
+                const availableDirections = possibleDirections.filter(dir => dir !== oppositeDirection[currentDirection]);
+                
+                // 선택할 수 있는 방향 중 랜덤으로 하나 선택
+                return availableDirections[Math.floor(Math.random() * availableDirections.length)];
+            }
+
+
+            
+            
+        }   
+
+        
+        class ChunkManager {
+            constructor(gl) {
+                this.chunks = new Map();
+                this.chunkSize = 500;  // 청크 크기
+                this.viewDistance = 3;  // 렌더링할 청크 범위
+                this.gl = gl;
+            }
+
+            update(camera) {
+                const chunkX = Math.floor(camera.position.x / this.chunkSize);
+                const chunkZ = Math.floor(camera.position.z / this.chunkSize);
+
+                for (let x = chunkX - this.viewDistance; x <= chunkX + this.viewDistance; x++) {
+                    for (let z = chunkZ - this.viewDistance; z <= chunkZ + this.viewDistance; z++) {
+                        const key = `${x},${z}`;
+                        if (!this.chunks.has(key)) {
+                            const chunk = new Chunk(x, z, this.chunkSize);
+                            this.chunks.set(key, chunk);
+                            this.gl.scene.add(chunk.mesh);
+                            
+                        }
+                    }
+                }
+                
+            }
+        }
+
+        // Three.js 환경 설정
+        let scene, camera, renderer, controls, chunkManager,chunk;
+
+        function init() {
+            // 씬 생성
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB); // 하늘색 배경
+
+            // 카메라 설정
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            //camera.position.set(100, 150, 200);
+            camera.position.set(150, 150, 0);
+            // 렌더러 생성
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // OrbitControls 추가
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true; // 부드러운 움직임
+            controls.dampingFactor = 0.05;
+
+            // 조명 추가
+            const light = new THREE.DirectionalLight(0xffffff, 1);
+            light.position.set(0, 200, 100).normalize();
+            scene.add(light);
+
+            // ChunkManager 초기화
+            //chunkManager = new ChunkManager({ scene });  // ChunkManager에 Three.js 씬 전달
+            chunk = new Chunk(0, 0, 500);  // (0, 0) 위치에 크기 500의 청크 생성
+            scene.add(chunk.mesh);  // 씬에 청크 추가
+            // 리사이즈 이벤트 처리
+            window.addEventListener('resize', onWindowResize, false);
+
+            // 애니메이션 루프 시작
+            animate();
+        }
+
+        // 창 크기 변경 시 처리
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // 애니메이션 루프
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // 청크 업데이트
+            //chunkManager.update(camera);
+            //chunkManager.chunks.forEach(chunk => chunk.moveCars());
+            // 차 애니메이션 업데이트
+            //chunkManager.chunks.forEach(chunk => {
+            //    chunk.animateCar();  // 각 청크의 차 애니메이션을 호출
+            //});
+            console.log("Number of meshes in scene:", scene.children.length);
+            chunk.animateCar();
+
+            // 컨트롤 업데이트
+            controls.update();
+
+            // 렌더링
+            renderer.render(scene, camera);
+        }
+
+        // 초기화 함수 호출
+        init();
+    </script>
+</body>
+</html>
